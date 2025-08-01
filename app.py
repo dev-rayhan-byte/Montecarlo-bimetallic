@@ -228,45 +228,36 @@ plot_container = st.columns(2)
 
 # Threading to avoid blocking
 if run_button:
-    params = {
-        'element_A': element_A,
-        'element_B': element_B,
-        'composition_A': composition_A,
-        'temperature': temperature,
-        'n_steps': int(n_steps),
-        'save_interval': int(save_interval),
-        'snapshot_interval': int(snapshot_interval),
-        'layers': tuple(layers),
-        'surfaces': surfaces_parsed,
-        'coefficients': coeffs,
-        'lattice_type': lattice_type
-    }
+   params = {
+    'element_A': element_A,
+    'element_B': element_B,
+    'composition_A': composition_A,
+    'temperature': temperature,
+    'n_steps': int(n_steps),
+    'save_interval': int(save_interval),
+    'snapshot_interval': int(snapshot_interval),
+    'layers': tuple(layers),
+    'surfaces': surfaces_parsed,
+    'coefficients': coeffs,
+    'lattice_type': lattice_type
+}
 
-    # Shared state for UI-safe progress updates
-    progress_state = {
-        "step": 0,
-        "energy": None,
-        "ratio": None,
-        "done": False,
-        "error": None
-    }
+result_holder = {}
+progress_state = {"step": 0, "energy": None, "ratio": None, "done": False, "error": None}
 
-    result_holder = {}
+def progress_cb(step, energy, ratio):
+    progress_state["step"] = step
+    progress_state["energy"] = energy
+    progress_state["ratio"] = ratio
 
-    # Callback that updates shared state (thread-safe)
-    def progress_cb(step, energy, ratio):
-        progress_state["step"] = step
-        progress_state["energy"] = energy
-        progress_state["ratio"] = ratio
+def target():
+    try:
+        result = run_simulation(params, progress_callback=progress_cb)
+        result_holder.update(result)
+    except Exception:
+        result_holder["error"] = traceback.format_exc()
+    progress_state["done"] = True
 
-    # Threaded target (runs simulation without touching UI)
-    def target():
-        try:
-            result = run_simulation(params, progress_callback=progress_cb)
-            result_holder.update(result)
-        except Exception:
-            result_holder["error"] = traceback.format_exc()
-        progress_state["done"] = True
 
     # Start simulation in background thread
     thread = threading.Thread(target=target)
