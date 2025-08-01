@@ -226,47 +226,49 @@ progress_bar = st.sidebar.progress(0)
 results_container = st.container()
 plot_container = st.columns(2)
 
-# Threading to avoid blocking
 if run_button:
-   params = {
-    'element_A': element_A,
-    'element_B': element_B,
-    'composition_A': composition_A,
-    'temperature': temperature,
-    'n_steps': int(n_steps),
-    'save_interval': int(save_interval),
-    'snapshot_interval': int(snapshot_interval),
-    'layers': tuple(layers),
-    'surfaces': surfaces_parsed,
-    'coefficients': coeffs,
-    'lattice_type': lattice_type
-}
+    # ✅ 1. Define parameters first
+    params = {
+        'element_A': element_A,
+        'element_B': element_B,
+        'composition_A': composition_A,
+        'temperature': temperature,
+        'n_steps': int(n_steps),
+        'save_interval': int(save_interval),
+        'snapshot_interval': int(snapshot_interval),
+        'layers': tuple(layers),
+        'surfaces': surfaces_parsed,
+        'coefficients': coeffs,
+        'lattice_type': lattice_type
+    }
 
-result_holder = {}
-progress_state = {"step": 0, "energy": None, "ratio": None, "done": False, "error": None}
+    # ✅ 2. Initialize result holders
+    result_holder = {}
+    progress_state = {"step": 0, "energy": None, "ratio": None, "done": False, "error": None}
 
-def progress_cb(step, energy, ratio):
-    progress_state["step"] = step
-    progress_state["energy"] = energy
-    progress_state["ratio"] = ratio
+    # ✅ 3. Callback updates only shared variables (not UI directly)
+    def progress_cb(step, energy, ratio):
+        progress_state["step"] = step
+        progress_state["energy"] = energy
+        progress_state["ratio"] = ratio
 
-def target():
-    try:
-        result = run_simulation(params, progress_callback=progress_cb)
-        result_holder.update(result)
-    except Exception:
-        result_holder["error"] = traceback.format_exc()
-    progress_state["done"] = True
+    # ✅ 4. Define thread target AFTER defining `params`
+    def target():
+        try:
+            result = run_simulation(params, progress_callback=progress_cb)
+            result_holder.update(result)
+        except Exception:
+            result_holder["error"] = traceback.format_exc()
+        progress_state["done"] = True
 
-
-    # Start simulation in background thread
+    # ✅ 5. Launch the thread
     thread = threading.Thread(target=target)
     thread.start()
 
-    # Main thread handles UI-safe progress polling
+    # ✅ 6. Progress loop (poll from main thread safely)
     with st.spinner("🌀 Simulation running... please wait..."):
         while not progress_state["done"]:
-            if progress_state["step"] > 0:
+            if progress_state["step"]:
                 pct = min(progress_state["step"] / params['n_steps'], 1.0)
                 progress_bar.progress(pct)
                 status_placeholder.markdown(
@@ -276,15 +278,15 @@ def target():
                 )
             time.sleep(0.5)
 
-    # Handle errors or display results
+    # ✅ 7. After thread completes, check result
     if "error" in result_holder:
         st.error("❌ Simulation failed.")
         with st.expander("🔍 Show error details"):
             st.code(result_holder["error"], language="python")
     else:
         st.success("✅ Simulation completed.")
-        res = result_holder
-        df_log = res["log"]
+        # ⬇ Your existing result display code here...
+
 
         # Show summary metrics
         st.subheader("Simulation Summary")
