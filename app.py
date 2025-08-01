@@ -226,8 +226,8 @@ progress_bar = st.sidebar.progress(0)
 results_container = st.container()
 plot_container = st.columns(2)
 
+# Threading to avoid blocking
 if run_button:
-    # ✅ 1. Define parameters first
     params = {
         'element_A': element_A,
         'element_B': element_B,
@@ -242,51 +242,36 @@ if run_button:
         'lattice_type': lattice_type
     }
 
-    # ✅ 2. Initialize result holders
-    result_holder = {}
-    progress_state = {"step": 0, "energy": None, "ratio": None, "done": False, "error": None}
-
-    # ✅ 3. Callback updates only shared variables (not UI directly)
+    progress_state = {"last_step": 0, "energy": None, "ratio": None}
     def progress_cb(step, energy, ratio):
-        progress_state["step"] = step
+        progress_state["last_step"] = step
         progress_state["energy"] = energy
         progress_state["ratio"] = ratio
+        pct = min(step / params['n_steps'], 1.0)
+        progress_bar.progress(pct)
+        status_placeholder.markdown(f"**Step:** {step} | **Energy:** {energy:.4f} eV | **Surface {element_A} Ratio:** {ratio:.4f}")
 
-    # ✅ 4. Define thread target AFTER defining `params`
+    run_future = st.spinner("Simulation running... this can take a while.")
+    # Run in thread so UI stays responsive
+    result_holder = {}
     def target():
         try:
-            result = run_simulation(params, progress_callback=progress_cb)
-            result_holder.update(result)
-        except Exception:
-            result_holder["error"] = traceback.format_exc()
-        progress_state["done"] = True
-
-    # ✅ 5. Launch the thread
+            result_holder.update(run_simulation(params, progress_callback=progress_cb))
+        except Exception as e:
+            result_holder["error"] = str(e)
     thread = threading.Thread(target=target)
     thread.start()
 
-    # ✅ 6. Progress loop (poll from main thread safely)
-    with st.spinner("🌀 Simulation running... please wait..."):
-        while not progress_state["done"]:
-            if progress_state["step"]:
-                pct = min(progress_state["step"] / params['n_steps'], 1.0)
-                progress_bar.progress(pct)
-                status_placeholder.markdown(
-                    f"**Step:** {progress_state['step']} | "
-                    f"**Energy:** {progress_state['energy']:.4f} eV | "
-                    f"**Surface {element_A} Ratio:** {progress_state['ratio']:.4f}"
-                )
-            time.sleep(0.5)
+    # Wait with simple polling
+    while thread.is_alive():
+        time.sleep(0.5)
+    st.success("✅ Simulation completed.")
 
-    # ✅ 7. After thread completes, check result
     if "error" in result_holder:
-        st.error("❌ Simulation failed.")
-        with st.expander("🔍 Show error details"):
-            st.code(result_holder["error"], language="python")
+        st.error(f"Simulation failed: {result_holder['error']}")
     else:
-        st.success("✅ Simulation completed.")
-        # ⬇ Your existing result display code here...
-
+        res = result_holder
+        df_log = res["log"]
 
         # Show summary metrics
         st.subheader("Simulation Summary")
@@ -297,7 +282,7 @@ if run_button:
         col2.metric(f"Initial Surface {element_A} Ratio", f"{init_ratio:.4f}")
         col3.metric(f"Final Surface {element_A} Ratio", f"{final_ratio:.4f}")
 
-        # Plot energy vs step
+        # Plots
         st.subheader("Evolution Plots")
         fig1, ax1 = plt.subplots()
         if not df_log.empty:
@@ -309,7 +294,7 @@ if run_button:
             st.pyplot(fig1)
 
             fig2, ax2 = plt.subplots()
-            ax2.plot(df_log["Step"], df_log[f"Surface {element_A} Ratio"], color="orange")
+            ax2.plot(df_log["Step"], df_log[f"Surface {element_A} Ratio"], label=f"Surface {element_A} Ratio", color="orange")
             ax2.set_xlabel("MC Step")
             ax2.set_ylabel(f"Surface {element_A} Ratio")
             ax2.grid(True)
@@ -332,10 +317,9 @@ if run_button:
             make_download_link(res["final_xyz"], "Final structure (.xyz)")
             make_download_link(res["xlsx_file"], "Simulation log (.xlsx)")
 
-        # Log table
+        # Show log table
         st.subheader("Raw Log Data")
         st.dataframe(df_log)
-
 
 result_holder = {}
 
@@ -411,5 +395,4 @@ else:
     # Show raw data
     st.subheader("📄 Raw Log Data")
     st.dataframe(df_log)
-
 
