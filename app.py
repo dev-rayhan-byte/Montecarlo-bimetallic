@@ -242,34 +242,56 @@ if run_button:
         'lattice_type': lattice_type
     }
 
-    progress_state = {"last_step": 0, "energy": None, "ratio": None}
+    # Shared state for UI-safe progress updates
+    progress_state = {
+        "step": 0,
+        "energy": None,
+        "ratio": None,
+        "done": False,
+        "error": None
+    }
+
+    result_holder = {}
+
+    # Callback that updates shared state (thread-safe)
     def progress_cb(step, energy, ratio):
-        progress_state["last_step"] = step
+        progress_state["step"] = step
         progress_state["energy"] = energy
         progress_state["ratio"] = ratio
-        pct = min(step / params['n_steps'], 1.0)
-        progress_bar.progress(pct)
-        status_placeholder.markdown(f"**Step:** {step} | **Energy:** {energy:.4f} eV | **Surface {element_A} Ratio:** {ratio:.4f}")
 
-    run_future = st.spinner("Simulation running... this can take a while.")
-    # Run in thread so UI stays responsive
-    result_holder = {}
+    # Threaded target (runs simulation without touching UI)
     def target():
         try:
-            result_holder.update(run_simulation(params, progress_callback=progress_cb))
-        except Exception as e:
-            result_holder["error"] = str(e)
+            result = run_simulation(params, progress_callback=progress_cb)
+            result_holder.update(result)
+        except Exception:
+            result_holder["error"] = traceback.format_exc()
+        progress_state["done"] = True
+
+    # Start simulation in background thread
     thread = threading.Thread(target=target)
     thread.start()
 
-    # Wait with simple polling
-    while thread.is_alive():
-        time.sleep(0.5)
-    st.success("✅ Simulation completed.")
+    # Main thread handles UI-safe progress polling
+    with st.spinner("🌀 Simulation running... please wait..."):
+        while not progress_state["done"]:
+            if progress_state["step"] > 0:
+                pct = min(progress_state["step"] / params['n_steps'], 1.0)
+                progress_bar.progress(pct)
+                status_placeholder.markdown(
+                    f"**Step:** {progress_state['step']} | "
+                    f"**Energy:** {progress_state['energy']:.4f} eV | "
+                    f"**Surface {element_A} Ratio:** {progress_state['ratio']:.4f}"
+                )
+            time.sleep(0.5)
 
+    # Handle errors or display results
     if "error" in result_holder:
-        st.error(f"Simulation failed: {result_holder['error']}")
+        st.error("❌ Simulation failed.")
+        with st.expander("🔍 Show error details"):
+            st.code(result_holder["error"], language="python")
     else:
+        st.success("✅ Simulation completed.")
         res = result_holder
         df_log = res["log"]
 
@@ -282,7 +304,7 @@ if run_button:
         col2.metric(f"Initial Surface {element_A} Ratio", f"{init_ratio:.4f}")
         col3.metric(f"Final Surface {element_A} Ratio", f"{final_ratio:.4f}")
 
-        # Plots
+        # Plot energy vs step
         st.subheader("Evolution Plots")
         fig1, ax1 = plt.subplots()
         if not df_log.empty:
@@ -294,7 +316,7 @@ if run_button:
             st.pyplot(fig1)
 
             fig2, ax2 = plt.subplots()
-            ax2.plot(df_log["Step"], df_log[f"Surface {element_A} Ratio"], label=f"Surface {element_A} Ratio", color="orange")
+            ax2.plot(df_log["Step"], df_log[f"Surface {element_A} Ratio"], color="orange")
             ax2.set_xlabel("MC Step")
             ax2.set_ylabel(f"Surface {element_A} Ratio")
             ax2.grid(True)
@@ -317,9 +339,10 @@ if run_button:
             make_download_link(res["final_xyz"], "Final structure (.xyz)")
             make_download_link(res["xlsx_file"], "Simulation log (.xlsx)")
 
-        # Show log table
+        # Log table
         st.subheader("Raw Log Data")
         st.dataframe(df_log)
+
 
 result_holder = {}
 
