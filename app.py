@@ -368,6 +368,6 @@ if uploaded_xlsx:
                 ax_e2.grid(True)
                 st.pyplot(fig_e2)
 
-except Exception:
+    except Exception:
     result_holder["error"] = traceback.format_exc()
 
