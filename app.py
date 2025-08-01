@@ -1,3 +1,4 @@
+import traceback
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -367,5 +368,6 @@ if uploaded_xlsx:
                 ax_e2.grid(True)
                 st.pyplot(fig_e2)
 
-    except Exception as e:
-        st.error(f"Failed to load uploaded log: {e}")
+except Exception:
+    result_holder["error"] = traceback.format_exc()
+
