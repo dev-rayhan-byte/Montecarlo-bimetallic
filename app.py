@@ -367,9 +367,9 @@ if uploaded_xlsx:
                 ax_e2.set_ylabel(f"Surface {element_A} Ratio")
                 ax_e2.grid(True)
                 st.pyplot(fig_e2)
-def target():
-    try:
-        result_holder.update(run_simulation(params, progress_callback=progress_cb))
-    except Exception:
-        result_holder["error"] = traceback.format_exc() 
+if "error" in result_holder:
+    st.error("❌ Simulation failed.")
+    with st.expander("🔍 Show error details"):
+        st.code(result_holder["error"], language="python")
+
 
