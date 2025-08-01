@@ -10,13 +10,14 @@ from openpyxl import Workbook, load_workbook
 from ase.cluster import FaceCenteredCubic, BodyCenteredCubic, HexagonalClosedPacked
 from ase.io import write, read
 from ase.neighborlist import build_neighbor_list
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder  # if needed for uploaded logs
 import matplotlib.pyplot as plt
 import base64
 from io import BytesIO
 
 st.set_page_config(page_title="Monte Carlo Nanoparticle Simulator", layout="wide")
 
+# --- Utility functions extracted/adapted from your script ---
 BOLTZMANN_K = 8.617333262e-5
 BULK_COORD = 12
 
@@ -62,6 +63,10 @@ def count_surface(p, A):
     return total_A, surf, surf_A, ratio
 
 def run_simulation(params, progress_callback=None):
+    """
+    Run the Monte Carlo simulation. Returns a dict of results and file paths.
+    progress_callback(step, energy, ratio) can be used to stream progress.
+    """
     A = params['element_A']
     B = params['element_B']
     composition_A = params['composition_A']
@@ -75,8 +80,9 @@ def run_simulation(params, progress_callback=None):
 
     ClusterBuilder = lattice_map.get(lattice_type)
     if ClusterBuilder is None:
-        raise ValueError(f"Unsupported lattice type '{lattice_type}'.")
+        raise ValueError(f"Unsupported lattice type '{lattice_type}'. Choose from 'fcc', 'bcc', or 'hcp'.")
 
+    # Build initial particle
     particle = ClusterBuilder(A, surfaces=SURFACES, layers=LAYERS)
     n_atoms = len(particle)
     n_A = int(n_atoms * composition_A)
@@ -88,6 +94,7 @@ def run_simulation(params, progress_callback=None):
     initial_xyz = f"initial_{A}{B}_{n_atoms}.xyz"
     write(initial_xyz, particle)
 
+    # Prepare storage
     os.makedirs("trajectory", exist_ok=True)
     log = []
 
@@ -130,11 +137,13 @@ def run_simulation(params, progress_callback=None):
     final_xyz = f"final_{A}{B}_{n_atoms}.xyz"
     write(final_xyz, particle)
 
+    # Save Excel log
     xlsx_file = f"MMC_{A}{B}_log.xlsx"
     wb = Workbook()
     ws = wb.active
     ws.title = "Simulation Log"
 
+    # Header params
     meta = [
         ("Element A", A), ("Element B", B), ("Composition A", composition_A),
         ("Temperature (K)", T), ("MC Steps", N_STEPS),
@@ -165,7 +174,7 @@ def run_simulation(params, progress_callback=None):
         "final_surface_data": count_surface(particle, A)
     }
 
-# === UI ===
+# --- Streamlit UI ---
 st.sidebar.header("Simulation Parameters")
 
 with st.sidebar.expander("Elements & Composition", expanded=True):
@@ -182,6 +191,7 @@ with st.sidebar.expander("Thermodynamics", expanded=False):
 with st.sidebar.expander("Lattice / Geometry", expanded=False):
     lattice_type = st.selectbox("Lattice Type", ["fcc", "bcc", "hcp"])
     layers = st.multiselect("Layers (x,y,z)", options=[1,2,3,4,5,6,7,8], default=[7,7,7])
+    # Ensure tuple of three
     if len(layers) != 3:
         st.warning("Please pick exactly 3 values for layers; defaulting to (7,7,7).")
         layers = [7,7,7]
@@ -189,10 +199,11 @@ with st.sidebar.expander("Lattice / Geometry", expanded=False):
     try:
         surfaces_parsed = eval(surfaces)
     except:
-        st.error("Cannot parse surfaces.")
+        st.error("Cannot parse surfaces. Use Python list of tuples like [(1,1,1),(1,1,1),(1,1,0)]")
         surfaces_parsed = [(1,1,1),(1,1,1),(1,1,0)]
 
 with st.sidebar.expander("Energy Coefficients", expanded=False):
+    # default set from your script
     coeffs = {
         'xA-A': st.number_input("xA-A", value=-0.022078),
         'xB-B': st.number_input("xB-B", value=-0.150000),
@@ -206,12 +217,15 @@ with st.sidebar.expander("Energy Coefficients", expanded=False):
 
 run_button = st.sidebar.button("▶️ Run Simulation")
 
+# Placeholder for status / progress
 status_placeholder = st.empty()
 progress_bar = st.sidebar.progress(0)
 
+# Container for results
 results_container = st.container()
 plot_container = st.columns(2)
 
+# Threading to avoid blocking
 if run_button:
     params = {
         'element_A': element_A,
@@ -237,19 +251,17 @@ if run_button:
         status_placeholder.markdown(f"**Step:** {step} | **Energy:** {energy:.4f} eV | **Surface {element_A} Ratio:** {ratio:.4f}")
 
     run_future = st.spinner("Simulation running... this can take a while.")
-
-    import traceback
-
-	def target():
+    # Run in thread so UI stays responsive
+    result_holder = {}
+    def target():
         try:
             result_holder.update(run_simulation(params, progress_callback=progress_cb))
         except Exception as e:
-            result_holder["error"] = traceback.format_exc()
-
-    result_holder = {}
+            result_holder["error"] = str(e)
     thread = threading.Thread(target=target)
     thread.start()
 
+    # Wait with simple polling
     while thread.is_alive():
         time.sleep(0.5)
     st.success("✅ Simulation completed.")
@@ -260,6 +272,7 @@ if run_button:
         res = result_holder
         df_log = res["log"]
 
+        # Show summary metrics
         st.subheader("Simulation Summary")
         col1, col2, col3 = st.columns(3)
         col1.metric("Duration (s)", f"{res['duration']:.1f}")
@@ -268,6 +281,7 @@ if run_button:
         col2.metric(f"Initial Surface {element_A} Ratio", f"{init_ratio:.4f}")
         col3.metric(f"Final Surface {element_A} Ratio", f"{final_ratio:.4f}")
 
+        # Plots
         st.subheader("Evolution Plots")
         fig1, ax1 = plt.subplots()
         if not df_log.empty:
@@ -279,13 +293,16 @@ if run_button:
             st.pyplot(fig1)
 
             fig2, ax2 = plt.subplots()
-            ax2.plot(df_log["Step"], df_log[f"Surface {element_A} Ratio"], color="orange")
+            ax2.plot(df_log["Step"], df_log[f"Surface {element_A} Ratio"], label=f"Surface {element_A} Ratio", color="orange")
             ax2.set_xlabel("MC Step")
             ax2.set_ylabel(f"Surface {element_A} Ratio")
             ax2.grid(True)
             ax2.set_title(f"Surface {element_A} Ratio vs Step")
             st.pyplot(fig2)
+        else:
+            st.info("No log entries to plot (check save interval relative to total steps).")
 
+        # Downloads
         st.subheader("Download Artifacts")
         with st.expander("Download Files"):
             def make_download_link(path, label=None):
@@ -299,9 +316,11 @@ if run_button:
             make_download_link(res["final_xyz"], "Final structure (.xyz)")
             make_download_link(res["xlsx_file"], "Simulation log (.xlsx)")
 
+        # Show log table
         st.subheader("Raw Log Data")
         st.dataframe(df_log)
 
+# Optional: Upload existing log or structures for comparison
 st.markdown("---")
 st.subheader("Upload & Inspect Existing Results")
 uploaded_xlsx = st.file_uploader("Upload previous MMC Excel log (.xlsx)", type=["xlsx"])
@@ -309,6 +328,8 @@ if uploaded_xlsx:
     try:
         wb = load_workbook(uploaded_xlsx, data_only=True)
         ws = wb.active
+        # infer header row (assumes after metadata)
+        # naive approach: find row with 'Step' cell
         header_row_idx = None
         for i, row in enumerate(ws.iter_rows(values_only=True), start=1):
             if row and 'Step' in row:
