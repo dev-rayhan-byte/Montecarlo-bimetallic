@@ -321,60 +321,79 @@ if run_button:
         st.subheader("Raw Log Data")
         st.dataframe(df_log)
 
-# Optional: Upload existing log or structures for comparison
-st.markdown("---")
-st.subheader("Upload & Inspect Existing Results")
-uploaded_xlsx = st.file_uploader("Upload previous MMC Excel log (.xlsx)", type=["xlsx"])
-if uploaded_xlsx:
-    try:
-        wb = load_workbook(uploaded_xlsx, data_only=True)
-        ws = wb.active
-        # infer header row (assumes after metadata)
-        # naive approach: find row with 'Step' cell
-        header_row_idx = None
-        for i, row in enumerate(ws.iter_rows(values_only=True), start=1):
-            if row and 'Step' in row:
-                header_row_idx = i
-                headers = list(row)
-                break
-        if header_row_idx is None:
-            st.error("Could not find header row with 'Step'")
-        else:
-            data = []
-            for row in ws.iter_rows(min_row=header_row_idx+1, values_only=True):
-                if all(v is None for v in row):
-                    continue
-                entry = {headers[j]: row[j] for j in range(len(headers))}
-                data.append(entry)
-            df_existing = pd.DataFrame(data)
-            st.success("Loaded existing log.")
-            st.dataframe(df_existing)
-
-            st.subheader("Plots from uploaded log")
-            fig_e1, ax_e1 = plt.subplots()
-            if 'Energy (eV)' in df_existing.columns:
-                ax_e1.plot(df_existing['Step'], df_existing['Energy (eV)'])
-                ax_e1.set_title("Energy vs Step")
-                ax_e1.set_xlabel("Step")
-                ax_e1.set_ylabel("Energy (eV)")
-                ax_e1.grid(True)
-                st.pyplot(fig_e1)
-            if f"Surface {element_A} Ratio" in df_existing.columns:
-                fig_e2, ax_e2 = plt.subplots()
-                ax_e2.plot(df_existing['Step'], df_existing[f"Surface {element_A} Ratio"])
-                ax_e2.set_title(f"Surface {element_A} Ratio vs Step")
-                ax_e2.set_xlabel("Step")
-                ax_e2.set_ylabel(f"Surface {element_A} Ratio")
-                ax_e2.grid(True)
-                st.pyplot(fig_e2)
-
-import traceback  # Make sure this is near the top of your file
+result_holder = {}
 
 def target():
     try:
         result_holder.update(run_simulation(params, progress_callback=progress_cb))
     except Exception:
-        result_holder["error"] = traceback.format_exc()  # This must be indented under `except`
+        result_holder["error"] = traceback.format_exc()
 
+# Launch simulation in a separate thread
+thread = threading.Thread(target=target)
+thread.start()
+
+# Show loading spinner and wait while simulation runs
+with st.spinner("🌀 Running Monte Carlo simulation... please wait..."):
+    while thread.is_alive():
+        time.sleep(0.5)
+
+# Check result and display
+if "error" in result_holder:
+    st.error("❌ Simulation failed.")
+    with st.expander("🔍 Show error details"):
+        st.code(result_holder["error"], language="python")
+else:
+    st.success("✅ Simulation completed.")
+    res = result_holder
+    df_log = res["log"]
+
+    # Show summary metrics
+    st.subheader("Simulation Summary")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("⏱ Duration (s)", f"{res['duration']:.1f}")
+    init_total, init_surf, init_surf_A, init_ratio = res["initial_surface_data"]
+    final_total, final_surf, final_surf_A, final_ratio = res["final_surface_data"]
+    col2.metric(f"🧪 Initial Surface {element_A} Ratio", f"{init_ratio:.4f}")
+    col3.metric(f"🧬 Final Surface {element_A} Ratio", f"{final_ratio:.4f}")
+
+    # Plots
+    st.subheader("📈 Evolution Plots")
+    fig1, ax1 = plt.subplots()
+    if not df_log.empty:
+        ax1.plot(df_log["Step"], df_log["Energy (eV)"], label="Energy (eV)")
+        ax1.set_xlabel("MC Step")
+        ax1.set_ylabel("Energy (eV)")
+        ax1.grid(True)
+        ax1.set_title("Energy vs Step")
+        st.pyplot(fig1)
+
+        fig2, ax2 = plt.subplots()
+        ax2.plot(df_log["Step"], df_log[f"Surface {element_A} Ratio"], label=f"Surface {element_A} Ratio", color="orange")
+        ax2.set_xlabel("MC Step")
+        ax2.set_ylabel(f"Surface {element_A} Ratio")
+        ax2.grid(True)
+        ax2.set_title(f"Surface {element_A} Ratio vs Step")
+        st.pyplot(fig2)
+    else:
+        st.info("ℹ️ No log entries to plot. Consider reducing save interval.")
+
+    # Downloads
+    st.subheader("📦 Download Artifacts")
+    with st.expander("📁 Download Files"):
+        def make_download_link(path, label=None):
+            label = label or os.path.basename(path)
+            with open(path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+            href = f'<a href="data:application/octet-stream;base64,{b64}" download="{os.path.basename(path)}">📥 {label}</a>'
+            st.markdown(href, unsafe_allow_html=True)
+
+        make_download_link(res["initial_xyz"], "Initial structure (.xyz)")
+        make_download_link(res["final_xyz"], "Final structure (.xyz)")
+        make_download_link(res["xlsx_file"], "Simulation log (.xlsx)")
+
+    # Show raw data
+    st.subheader("📄 Raw Log Data")
+    st.dataframe(df_log)
 
 
