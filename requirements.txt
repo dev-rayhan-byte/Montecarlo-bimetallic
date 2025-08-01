@@ -4,6 +4,4 @@ numpy
 matplotlib
 ase
 openpyxl
-imageio
-scikit-learn
-streamlit-py3dmol
+scikit-learn   
