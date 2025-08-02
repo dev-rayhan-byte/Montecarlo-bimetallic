@@ -9,17 +9,16 @@ import math
 import tempfile
 import ast
 import base64
-from io import BytesIO
 from openpyxl import Workbook
 from ase.cluster import FaceCenteredCubic, BodyCenteredCubic, HexagonalClosedPacked
 from ase.io import write
 from ase.neighborlist import build_neighbor_list
 import matplotlib.pyplot as plt
 
-# Streamlit Page Config
+# ---- Streamlit Page Config ----
 st.set_page_config(page_title="Monte Carlo Nanoparticle Simulator", layout="wide")
 
-# Constants
+# ---- Constants ----
 BOLTZMANN_K = 8.617333262e-5
 BULK_COORD = 12
 lattice_map = {
@@ -28,7 +27,7 @@ lattice_map = {
     'hcp': HexagonalClosedPacked
 }
 
-# Utility Functions
+# ---- Helper Functions ----
 def symbol_type(sym, A):
     return 'A' if sym == A else 'B'
 
@@ -74,13 +73,13 @@ def run_simulation(params, progress_callback=None):
     LAYERS = params['layers']
     SURFACES = params['surfaces']
     coeffs = params['coefficients']
-    lattice_type = params.get('lattice_type', 'fcc').lower()
+    lattice_type = params['lattice_type']
 
     ClusterBuilder = lattice_map.get(lattice_type)
     if ClusterBuilder is None:
         raise ValueError(f"Unsupported lattice type '{lattice_type}'. Choose from 'fcc', 'bcc', or 'hcp'.")
 
-    # Build initial particle
+    # Build Initial Particle
     particle = ClusterBuilder(A, surfaces=SURFACES, layers=LAYERS)
     n_atoms = len(particle)
     n_A = int(n_atoms * composition_A)
@@ -89,16 +88,14 @@ def run_simulation(params, progress_callback=None):
         particle[i].symbol = A if i in indices_A else B
 
     initial_surface_data = count_surface(particle, A)
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.xyz') as tmp:
-        write(tmp.name, particle)
-        initial_xyz = tmp.name
 
+    # Prepare Storage
     os.makedirs("trajectory", exist_ok=True)
     log = []
-
     energy = calculate_energy(particle, A, coeffs)
     start_time = time.time()
 
+    # Monte Carlo Loop
     for step in range(1, N_STEPS + 1):
         i = np.random.randint(0, n_atoms)
         neighbors = build_neighbor_list(particle).get_neighbors(i)[0]
@@ -128,39 +125,44 @@ def run_simulation(params, progress_callback=None):
             })
             if progress_callback:
                 progress_callback(step, energy, ratio)
+
         if step % params.get('snapshot_interval', 500) == 0:
-            snapshot_file = f"trajectory/step_{step:05d}.xyz"
-            write(snapshot_file, particle)
+            write(f"trajectory/step_{step:05d}.xyz", particle)
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.xyz') as tmp:
-        write(tmp.name, particle)
-        final_xyz = tmp.name
+    duration = time.time() - start_time
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Simulation Log"
-        meta = [
-            ("Element A", A), ("Element B", B), ("Composition A", composition_A),
-            ("Temperature (K)", T), ("MC Steps", N_STEPS),
-            ("Save Interval", SAVE_INTERVAL), ("Total Atoms", n_atoms)
-        ]
-        for i, (k, v) in enumerate(meta, 1):
-            ws.cell(row=i, column=1, value=k)
-            ws.cell(row=i, column=2, value=v)
+    # Save Initial and Final XYZ files
+    initial_xyz = tempfile.NamedTemporaryFile(delete=False, suffix='.xyz').name
+    final_xyz = tempfile.NamedTemporaryFile(delete=False, suffix='.xyz').name
+    write(initial_xyz, ClusterBuilder(A, surfaces=SURFACES, layers=LAYERS))
+    write(final_xyz, particle)
 
-        header_row = len(meta) + 2
-        headers = list(log[0].keys()) if log else []
+    # Save Excel Log
+    xlsx_file = tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx').name
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Simulation Log"
+
+    meta = [
+        ("Element A", A), ("Element B", B), ("Composition A", composition_A),
+        ("Temperature (K)", T), ("MC Steps", N_STEPS),
+        ("Save Interval", SAVE_INTERVAL), ("Total Atoms", n_atoms)
+    ]
+    for i, (k, v) in enumerate(meta, 1):
+        ws.cell(row=i, column=1, value=k)
+        ws.cell(row=i, column=2, value=v)
+
+    header_row = len(meta) + 2
+    if log:
+        headers = list(log[0].keys())
         for j, h in enumerate(headers, 1):
             ws.cell(row=header_row, column=j, value=h)
         for i, entry in enumerate(log, header_row + 1):
             for j, h in enumerate(headers, 1):
                 ws.cell(row=i, column=j, value=entry[h])
 
-        wb.save(tmp.name)
-        xlsx_file = tmp.name
+    wb.save(xlsx_file)
 
-    duration = time.time() - start_time
     return {
         "initial_xyz": initial_xyz,
         "final_xyz": final_xyz,
@@ -171,7 +173,14 @@ def run_simulation(params, progress_callback=None):
         "final_surface_data": count_surface(particle, A)
     }
 
-# Streamlit Sidebar Inputs
+def make_download_link(path, label=None):
+    label = label or os.path.basename(path)
+    with open(path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+    href = f'<a href="data:application/octet-stream;base64,{b64}" download="{os.path.basename(path)}">📥 {label}</a>'
+    st.markdown(href, unsafe_allow_html=True)
+
+# ---- Streamlit Sidebar UI ----
 st.sidebar.header("Simulation Parameters")
 
 with st.sidebar.expander("Elements & Composition", expanded=True):
@@ -179,26 +188,26 @@ with st.sidebar.expander("Elements & Composition", expanded=True):
     element_B = st.text_input("Element B (e.g., Ru)", value="Ru")
     composition_A = st.slider("Composition of A (fraction)", 0.0, 1.0, 0.5, step=0.05)
 
-with st.sidebar.expander("Thermodynamics", expanded=False):
+with st.sidebar.expander("Thermodynamics"):
     temperature = st.number_input("Temperature (K)", min_value=1.0, value=250.0, step=1.0)
     n_steps = st.number_input("Monte Carlo Steps", min_value=100, value=2000, step=100)
     save_interval = st.number_input("Log Save Interval", min_value=1, value=200, step=1)
     snapshot_interval = st.number_input("Snapshot Interval", min_value=100, value=500, step=100)
 
-with st.sidebar.expander("Lattice / Geometry", expanded=False):
+with st.sidebar.expander("Lattice / Geometry"):
     lattice_type = st.selectbox("Lattice Type", ["fcc", "bcc", "hcp"])
     layers = st.multiselect("Layers (x,y,z)", options=[1,2,3,4,5,6,7,8], default=[7,7,7])
     if len(layers) != 3:
-        st.warning("Please pick exactly 3 values for layers; defaulting to (7,7,7).")
+        st.warning("Please select exactly 3 values for layers.")
         layers = [7,7,7]
-    surfaces = st.text_input("Surfaces (list of tuples)", value="[(1,1,1),(1,1,1),(1,1,0)]")
+    surfaces_input = st.text_input("Surfaces (list of tuples)", value="[(1,1,1),(1,1,1),(1,1,0)]")
     try:
-        surfaces_parsed = ast.literal_eval(surfaces)
+        surfaces_parsed = ast.literal_eval(surfaces_input)
     except:
-        st.error("Cannot parse surfaces. Use Python list of tuples like [(1,1,1),(1,1,1),(1,1,0)]")
+        st.error("Invalid surface input! Using default [(1,1,1),(1,1,1),(1,1,0)]")
         surfaces_parsed = [(1,1,1),(1,1,1),(1,1,0)]
 
-with st.sidebar.expander("Energy Coefficients", expanded=False):
+with st.sidebar.expander("Energy Coefficients"):
     coeffs = {
         'xA-A': st.number_input("xA-A", value=-0.022078),
         'xB-B': st.number_input("xB-B", value=-0.150000),
@@ -210,12 +219,11 @@ with st.sidebar.expander("Energy Coefficients", expanded=False):
         'xA-B-out': st.number_input("xA-B-out", value=0.051042),
     }
 
-run_button = st.sidebar.button("\u25B6\ufe0f Run Simulation")
-
-status_placeholder = st.empty()
+run_button = st.sidebar.button("▶️ Run Simulation")
 progress_bar = st.sidebar.progress(0)
+status_placeholder = st.empty()
 
-# Simulation Execution Block
+# ---- Simulation Execution ----
 if run_button:
     params = {
         'element_A': element_A,
@@ -239,7 +247,7 @@ if run_button:
         progress_state["energy"] = energy
         progress_state["ratio"] = ratio
 
-    def target():
+    def simulation_thread():
         try:
             result = run_simulation(params, progress_callback=progress_cb)
             result_holder.update(result)
@@ -247,10 +255,10 @@ if run_button:
             result_holder["error"] = traceback.format_exc()
         progress_state["done"] = True
 
-    thread = threading.Thread(target=target)
+    thread = threading.Thread(target=simulation_thread)
     thread.start()
 
-    with st.spinner("\ud83d\udd00 Simulation running... please wait..."):
+    with st.spinner("🌀 Running Monte Carlo simulation... please wait..."):
         while not progress_state["done"]:
             if progress_state["step"] > 0:
                 pct = min(progress_state["step"] / params['n_steps'], 1.0)
@@ -262,12 +270,13 @@ if run_button:
                 )
             time.sleep(0.5)
 
+    # ---- Results Display ----
     if "error" in result_holder:
-        st.error("\u274c Simulation failed.")
-        with st.expander("\ud83d\udd0d Show error details"):
-            st.code(result_holder["error"], language="python")
+        st.error("❌ Simulation failed.")
+        with st.expander("🔍 Error Details"):
+            st.code(result_holder["error"])
     else:
-        st.success("\u2705 Simulation completed.")
+        st.success("✅ Simulation completed.")
         res = result_holder
         df_log = res["log"]
 
@@ -281,33 +290,21 @@ if run_button:
 
         st.subheader("Evolution Plots")
         fig1, ax1 = plt.subplots()
-        if not df_log.empty:
-            ax1.plot(df_log["Step"], df_log["Energy (eV)"], label="Energy (eV)")
-            ax1.set_xlabel("MC Step")
-            ax1.set_ylabel("Energy (eV)")
-            ax1.grid(True)
-            ax1.set_title("Energy vs Step")
-            st.pyplot(fig1)
+        ax1.plot(df_log["Step"], df_log["Energy (eV)"])
+        ax1.set_xlabel("MC Step")
+        ax1.set_ylabel("Energy (eV)")
+        ax1.grid(True)
+        st.pyplot(fig1)
 
-            fig2, ax2 = plt.subplots()
-            ax2.plot(df_log["Step"], df_log[f"Surface {element_A} Ratio"], color="orange")
-            ax2.set_xlabel("MC Step")
-            ax2.set_ylabel(f"Surface {element_A} Ratio")
-            ax2.grid(True)
-            ax2.set_title(f"Surface {element_A} Ratio vs Step")
-            st.pyplot(fig2)
-        else:
-            st.info("No log entries to plot (check save interval relative to total steps).")
+        fig2, ax2 = plt.subplots()
+        ax2.plot(df_log["Step"], df_log[f"Surface {element_A} Ratio"], color="orange")
+        ax2.set_xlabel("MC Step")
+        ax2.set_ylabel(f"Surface {element_A} Ratio")
+        ax2.grid(True)
+        st.pyplot(fig2)
 
         st.subheader("Download Artifacts")
-        with st.expander("Download Files"):
-            def make_download_link(path, label=None):
-                label = label or os.path.basename(path)
-                with open(path, "rb") as f:
-                    b64 = base64.b64encode(f.read()).decode()
-                href = f'<a href="data:application/octet-stream;base64,{b64}" download="{os.path.basename(path)}">\ud83d\udce5 {label}</a>'
-                st.markdown(href, unsafe_allow_html=True)
-
+        with st.expander("Files"):
             make_download_link(res["initial_xyz"], "Initial structure (.xyz)")
             make_download_link(res["final_xyz"], "Final structure (.xyz)")
             make_download_link(res["xlsx_file"], "Simulation log (.xlsx)")
